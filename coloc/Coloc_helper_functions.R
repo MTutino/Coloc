@@ -1,9 +1,29 @@
-perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio, tissue, gwas_n = NULL, GTEX_APP = TRUE, GWAS_type="quant", GWAS_ID=GWAS_ID, QTL_n=QTL_n, is.eQTL=FALSE, cores=3){
+perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_n = NULL, GWAS_type, GWAS_ID, QTL_n, is.eQTL=FALSE, cores=3){
         ##############################
         number_tests = nrow(overlap_df)
         counter = 1
+
+
+      # make cluster
+#      library(parallel)
+#      cl <- makeCluster(cores)
+#      on.exit(stopCluster(cl))  # stop cluster on exit
+
+    # Export the necessary variables to workers
+#  clusterExport(cl, varlist = c("in_m_qtl", "in_gwas", "out_path", 
+#                                "gwas_n", "GWAS_type", "GWAS_ID", "QTL_n", "is.eQTL", "GWAS_n", "type", "m_anno"),
+#                envir = environment())
+
+    # load packages inside workers
+#    clusterEvalQ(cl, {
+#      library(dplyr)
+#      library(data.table)
+#      library(coloc)
+#    })
+    
         ##############################
         coloc_df = do.call(rbind, mclapply(1:nrow(overlap_df), FUN = function(coloc_nr){
+#      coloc_list <- parLapply(cl, seq_len(nrow(overlap_df)), function(coloc_nr) {
             ##############################
             print(paste0("Running coloc test: ", coloc_nr, " of ", number_tests))    
             ##############################
@@ -19,7 +39,7 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
             # prepare mqtl_stats
             mqtl_stats = as.data.frame(in_m_qtl[[cpg_coloc]])
             
-            mqtl_stats = mqtl_stats[,c("variant_id", "maf", "slope", "slope_se", "pval_nominal", "chr", "pos", "REF", "ALT" )]
+            mqtl_stats = mqtl_stats[,c("variant_id", "maf", "slope", "slope_se", "pval_nominal", "chr", "pos", "REF", "ALT", "varid_for_coloc" )]
 
             # NEA refers to REF allele
             mqtl_stats$mqtl_nea = mqtl_stats$REF
@@ -34,38 +54,39 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
                 
          
                
-            in_gwas$variant_id_chrpos <- paste(in_gwas$chr, in_gwas$position, toupper(in_gwas$ea), sep="_")
-            mqtl_stats$variant_id_chrpos = paste(mqtl_stats$chr, mqtl_stats$pos, mqtl_stats$ALT, sep="_")
+            #in_gwas$variant_id_chrpos <- paste(in_gwas$chr, in_gwas$position, toupper(in_gwas$ea), sep="_")
+            #mqtl_stats$variant_id_chrpos = paste(mqtl_stats$chr, mqtl_stats$pos, mqtl_stats$ALT, sep="_")
             
-            mqtl_stats$varid_for_coloc <- mqtl_stats$variant_id_chrpos
+            #mqtl_stats$varid_for_coloc <- mqtl_stats$variant_id_chrpos
             mqtl_stats = mqtl_stats[!is.na(mqtl_stats$varid_for_coloc),]
             mqtl_stats <- mqtl_stats %>% 
-                                dplyr::filter(variant_id_chrpos %in% in_gwas$variant_id_chrpos)
+                                dplyr::filter(varid_for_coloc %in% in_gwas$varid_for_coloc)
 
 
-	    if(dim(mqtl_stats)[1] < 100){
+    	    if(dim(mqtl_stats)[1] < 100){
                 return(NULL)
             }
             mqtl_stats$nvar_coloc = length(mqtl_stats$varid_for_coloc)
 
 
             print(paste0("All selected variants in gwassumstats: ", all(mqtl_stats$varid_for_coloc %in% 
-                                                                        in_gwas$variant_id_chrpos)))
+                                                                        in_gwas$varid_for_coloc)))
             
             #######################
-            ## SAVE PWCOCO INPUT FILE
-            
-        		pwcoco_qtl_input <- mqtl_stats %>%
-                                          dplyr::select("SNP"=variant_id, "A1"=ALT, "A2"=REF, "A1_freq"=maf, "beta"=slope, "se"=slope_se, "p"=pval_nominal) %>%
+            ## SAVE COLOC INPUT FILE
+
+            # Save QTL input
+        	pwcoco_qtl_input <- mqtl_stats %>%
+                                          dplyr::select("SNP"=variant_id, "chr"=chr, "pos"=pos, "A1"=ALT, "A2"=REF, "A1_freq"=maf, "beta"=slope, "se"=slope_se, "p"=pval_nominal) %>%
                                           dplyr::mutate("n"=QTL_n)
                           
-            fwrite(pwcoco_qtl_input, file=file.path(out_path, paste0("PWCOCO/PWCOCO_mQTL_", tissue, "_", GWAS_ID), paste0(cpg_coloc,"_",gwas_signal_NR,"_mQTL_", tissue,"_GWAS_",GWAS_ID,".txt")), sep="\t")
+            fwrite(pwcoco_qtl_input, file=file.path(out_path, paste0("coloc/Coloc_sumstats/Coloc_mQTL_", GWAS_ID), paste0(cpg_coloc,"_",gwas_signal_NR,"_mQTL_GWAS_",GWAS_ID,".txt")), sep="\t")
             rm(pwcoco_qtl_input)
             
-            
+            # Save GWAS input
             pwcoco_gwas_input <- in_gwas %>%
-                                    dplyr::filter(variant_id_chrpos %in%  mqtl_stats$varid_for_coloc) %>%
-                                    dplyr::select("SNP"=rsid, "A1"=ea, "A2"=nea, "A1_freq"=eaf, "beta"=beta, "se"=se, "p"=p)
+                                    dplyr::filter(varid_for_coloc %in%  mqtl_stats$varid_for_coloc) %>%
+                                    dplyr::select("SNP"=rsid, "chr"=chr, "pos"=position, "A1"=ea, "A2"=nea, "A1_freq"=eaf, "beta"=beta, "se"=se, "p"=p)
 
             if(GWAS_type == "cc"){
                 pwcoco_gwas_input <-  pwcoco_gwas_input %>%
@@ -80,19 +101,19 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
                 pwcoco_gwas_input$A1_freq <- mqtl_stats$maf[match(mqtl_stats$variant_id, pwcoco_gwas_input$SNP)]
             }
             
-            fwrite(pwcoco_gwas_input, file=file.path(out_path, paste0("PWCOCO/PWCOCO_", GWAS_ID), paste0(cpg_coloc,"_",gwas_signal_NR,"_mQTL_", tissue, "_GWAS_",GWAS_ID,".txt")), sep="\t")
+            fwrite(pwcoco_gwas_input, file=file.path(out_path, paste0("coloc/Coloc_sumstats/Coloc_", GWAS_ID), paste0(cpg_coloc,"_",gwas_signal_NR,"_mQTL_GWAS_",GWAS_ID,".txt")), sep="\t")
             rm(pwcoco_gwas_input)
             
             
             
             #######################
-            # From here
+           
             mqtl_stats = mqtl_stats[, !(colnames(mqtl_stats) %in% 
-                                        c("variant_id", "variant_id_rev", "mqtl_nea", "mqtl_ea"))]
+                                        c("variant_id", "variant_id_rev", "mqtl_nea", "mqtl_ea", "chr", "pos"))]
             
             colnames(mqtl_stats) = paste0("MQTL_", colnames(mqtl_stats))
             ##############################
-            gwas_stats = as.data.frame(in_gwas[in_gwas$variant_id_chrpos %in% mqtl_stats$MQTL_varid_for_coloc,])
+            gwas_stats = as.data.frame(in_gwas[in_gwas$varid_for_coloc %in% mqtl_stats$MQTL_varid_for_coloc,])
             
             gwas_stats <- gwas_stats[,colSums(is.na(gwas_stats)) != nrow(gwas_stats)]
             
@@ -106,7 +127,7 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
                                                                                                                                                                                   
             }                                                                                                                                                                     
             
-            mqtl_gwas_merge = merge(mqtl_stats, gwas_stats, by.x = "MQTL_varid_for_coloc", by.y = "GWAS_variant_id_chrpos")
+            mqtl_gwas_merge = merge(mqtl_stats, gwas_stats, by.x = "MQTL_varid_for_coloc", by.y = "GWAS_varid_for_coloc")
             mqtl_gwas_merge <- mqtl_gwas_merge[!(duplicated(mqtl_gwas_merge$MQTL_varid_for_coloc)),]
             
             # Remove SNPs where the NEA is the same but the EA is different between QTL and GWAS
@@ -125,39 +146,7 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
             n_gwas_variants_sign_1emins5 = nrow(subset(mqtl_gwas_merge, mqtl_gwas_merge$'GWAS_p' < 1e-5))
             n_gwas_variants_sign_1emins4 = nrow(subset(mqtl_gwas_merge, mqtl_gwas_merge$'GWAS_p' < 1e-4))
             ##############################
-            if(GTEX_APP){
-                ##############################
-                # perform coloc.fast (this uses gtex implementation coloc.fast)
-                coloc_model <- coloc.fast(beta1 = mqtl_gwas_merge$MQTL_slope_for_coloc, 
-                                          se1 = mqtl_gwas_merge$MQTL_slope_se, 
-                                          beta2 = mqtl_gwas_merge$GWAS_beta, se2 = mqtl_gwas_merge$GWAS_se)
-                
-                newline = data.frame(cpg = cpg_coloc, cpg_pos = cpg_pos, cpg_gene = as.character(m_anno[cpg_coloc,"gene"]),
-                                     gwas_lead_snp = paste0(gwas_signal_chr, ":", gwas_signal_pos), 
-                                     gwas_lead_snp_rs = gwas_signal_id_coloc, 
-                                     nvariants = coloc_model$nvariants, 
-                                     coloc_region_chr = unique(mqtl_gwas_merge$GWAS_chr), 
-                                     coloc_region_start = ifelse(sign(gwas_signal_pos - 100000) == -1, 1, gwas_signal_pos - 100000), 
-                                     coloc_region_end = gwas_signal_pos + 100000, 
-                                     n_gwas_variants_sign_5emins8 = n_gwas_variants_sign_5emins8,
-                                     n_gwas_variants_sign_1emins7 = n_gwas_variants_sign_1emins7, 
-                                     n_gwas_variants_sign_1emins6 = n_gwas_variants_sign_1emins6, 
-                                     n_gwas_variants_sign_1emins5 = n_gwas_variants_sign_1emins5, 
-                                     n_gwas_variants_sign_1emins4 = n_gwas_variants_sign_1emins4, 
-                                     PP0 = coloc_model$results$posterior[1], PP1 = coloc_model$results$posterior[2], 
-                                     PP2 = coloc_model$results$posterior[3], PP3 = coloc_model$results$posterior[4],
-                                     PP4 = coloc_model$results$posterior[5], test_nea = test_nea, test_ea = test_ea,    
-                                     gwas_signal = gwas_signal_NR, stringsAsFactors = F)
-                    ##############################
-                    # save 
-                    if(coloc_model$results$posterior[5] > 0.8 | (coloc_model$results$posterior[5] > 0.6 & coloc_model$results$posterior[5]/coloc_model$results$posterior[4] > 2.5)){
-                      file_path = paste0(out_path, "sumstats_", cpg_coloc, "_", 
-                                         as.character(paste0(gwas_signal_chr, ":", gwas_signal_pos,"_",gwas_signal_id_coloc)), ".rda")
-
-                      save(mqtl_gwas_merge, file = file_path)
-                    }
-                   return(newline)
-           }else{
+            
                     ##############################
                     # another coloc model that enables 
                     # https://chr1swallace.github.io/coloc/articles/a03_enumeration.html
@@ -169,7 +158,7 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
                                     beta = mqtl_gwas_merge$MQTL_slope, 
                                     varbeta = (mqtl_gwas_merge$MQTL_slope_se)^2, 
                                     type = "quant", 
-                                    snp = mqtl_gwas_merge$MQTL_variant_id_chrpos, 
+                                    snp = mqtl_gwas_merge$MQTL_varid_for_coloc, 
                                     stringsAsFactors = F)
                     D1$MAF = ifelse(D1$MAF <= 0.5, D1$MAF, 1 - D1$MAF)    
                     # GWAS
@@ -198,13 +187,13 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
                     if(coloc_model$summary["PP.H4.abf"] > 0.8 | (coloc_model$summary["PP.H4.abf"] > 0.6 & (coloc_model$summary["PP.H4.abf"]/coloc_model$summary["PP.H3.abf"]) > 2)){
                         
                         # save coloc frame
-                        file_name = paste0("sumstats_", tissue, "_", cpg_coloc, "_", 
+                        file_name = paste0("sumstats_", cpg_coloc, "_", 
                                          as.character(paste0(gwas_signal_chr, ":", gwas_signal_pos,"_",gwas_signal_id_coloc)), ".rda")
                           save(mqtl_gwas_merge, file = file.path(out_path, paste0(GWAS_ID, "_coloc_rda_files"), file_name))
                         
                         
                      }
-                        if(is.eQTL==TRUE){
+                    if(is.eQTL==TRUE){
                             # output credible set as data.table for GWAS eQTL colocalization
                             o <- order(coloc_model$results$SNP.PP.H4,decreasing=TRUE)
                             cs <- cumsum(coloc_model$results$SNP.PP.H4[o])
@@ -214,8 +203,8 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
                             newline = data.frame(cpg = cpg_coloc, cpg_pos = cpg_pos,
                                                  coloc_lead_snp_chr = sub("_.*", "", lead.snp),
                                                  coloc_lead_snp_pos = strsplit(lead.snp, "_")[[1]][2],
-                                                 coloc_lead_snp_rs = mqtl_gwas_merge[mqtl_gwas_merge$MQTL_variant_id_chrpos==lead.snp,]$GWAS_rsid,
-                                                 credible_set = paste(mqtl_gwas_merge[mqtl_gwas_merge$MQTL_variant_id_chrpos %in% credset,]$GWAS_rsid, collapse=","),
+                                                 coloc_lead_snp_rs = mqtl_gwas_merge[mqtl_gwas_merge$MQTL_varid_for_coloc==lead.snp,]$GWAS_rsid,
+                                                 credible_set = paste(mqtl_gwas_merge[mqtl_gwas_merge$MQTL_varid_for_coloc %in% credset,]$GWAS_rsid, collapse=","),
                                                  gwas_lead_snp = paste0(gwas_signal_chr, ":", gwas_signal_pos), 
                                                  gwas_lead_snp_rs = gwas_signal_id_coloc, 
                                                  nvariants = coloc_model$summary["nsnps"], 
@@ -243,8 +232,8 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
                             newline = data.frame(cpg = cpg_coloc, cpg_pos = cpg_pos, cpg_gene = as.character(m_anno[cpg_coloc,"gene"]),
                                                  coloc_lead_snp_chr = sub("_.*", "", lead.snp),
                                                  coloc_lead_snp_pos = strsplit(lead.snp, "_")[[1]][2],
-                                                 coloc_lead_snp_rs = mqtl_gwas_merge[mqtl_gwas_merge$MQTL_variant_id_chrpos==lead.snp,]$GWAS_rsid,
-                                                 credible_set = as.list(credset),
+                                                 coloc_lead_snp_rs = mqtl_gwas_merge[mqtl_gwas_merge$MQTL_varid_for_coloc==lead.snp,]$GWAS_rsid,
+                                                 credible_set = paste(mqtl_gwas_merge[mqtl_gwas_merge$MQTL_varid_for_coloc %in% credset,]$GWAS_rsid, collapse=","),
                                                  gwas_lead_snp = paste0(gwas_signal_chr, ":", gwas_signal_pos), 
                                                  gwas_lead_snp_rs = gwas_signal_id_coloc, 
                                                  nvariants = coloc_model$summary["nsnps"], 
@@ -264,74 +253,27 @@ perform_coloc = function(overlap_df, in_m_qtl, out_path, in_gwas, gwas_cc_ratio,
                         return(newline)
              
                         }
-                              }
+                              
            
     }, mc.cores = cores))
+#        })
     
     ##############################
+    ##############################
+#      coloc_list <- coloc_list[!sapply(coloc_list, is.null)]
+#      if (length(coloc_list) == 0) {
+#        return(NULL)
+#      }
+#      coloc_df <- do.call(rbind, coloc_list)
+    
     return(coloc_df)
 }
 
-coloc.fast <- function(beta1, se1, beta2, se2, 
-                       priorsd1 = 1, priorsd2 = 1, priorc1 = 1e-4, priorc2 = 1e-4, priorc12 = 1e-5, 
-                       rounded = 6) {
-  abf1 <- abf.Wakefield(beta1, se1, priorsd1, log = TRUE)
-  abf2 <- abf.Wakefield(beta2, se2, priorsd2, log = TRUE)
-  w <- which(!is.na(abf1) & !is.na(abf2))
-  ## Fill in zeros not filter out, thanks Karl and Karsten!!!!
-  nv <- length(w)
-  abf1 <- norm1(c(0, abf1[w]), log = TRUE)
-  abf2 <- norm1(c(0, abf2[w]), log = TRUE)
-  res <- data.frame(hypothesis = paste0("H", 0:4),
-                    label = c("No association",
-                      "One variant associated with phenotype 1 only",
-                      "One variant associated with phenotype 2 only",
-                      "Two variants separately associated with phenotypes 1 and 2",
-                      "One variant associated with phenotypes 1 and 2"),
-                    prior = norm1(c(1, priorc1*nv, priorc2*nv, priorc1*priorc2*nv*(nv - 1), priorc12*nv)),
-                    bf = if (nv > 0) c(abf1[1]*abf2[1], 
-                      sum(abf1[-1])*abf2[1]/nv, 
-                      abf1[1]*sum(abf2[-1])/nv, 
-                      (sum(abf1[-1])*sum(abf2[-1]) - sum(abf1[-1]*abf2[-1]))/(nv*(nv - 1)), 
-                      sum(abf1[-1]*abf2[-1])/nv) else rep(NA, 5))
-  res$bf <- res$bf/max(res$bf) # was: res$bf/res$bf[1] # caused division by zero for strongly colocalized signals
-  res$posterior <- norm1(res$prior*res$bf)
-  ## compute model averaged effect size ratios
-  mw <- abf1[-1]*abf2[-1] # model weights
-  alpha12 <- sum(beta1[w]/beta2[w]*mw)/sum(mw)
-  alpha21 <- sum(beta2[w]/beta1[w]*mw)/sum(mw)
-  if (is.finite(rounded)) {
-    res$posterior = round(res$posterior, rounded)
-  }
-  return(list(results = res, nvariants = length(w), alpha12 = alpha12, alpha21 = alpha21))
-}
 
-# copied this function which is needed for coloc.fast package above
-# https://rdrr.io/github/tobyjohnson/gtx/src/R/abf.R                    
-abf.Wakefield <- function(beta, se, priorsd, log = FALSE) {
-  if (log) {
-    return(log(sqrt(se^2/(se^2 + priorsd^2))) + 
-           (beta/se)^2/2 * priorsd^2/(se^2 + priorsd^2))
-  } else {
-    return(sqrt(se^2/(se^2 + priorsd^2)) * 
-           exp((beta/se)^2/2 * priorsd^2/(se^2 + priorsd^2)))
-  }
-}           
+
+
                     
-norm1 <- function(x, log = FALSE) {
-  if (all(is.na(x))) return(x)
-  if (log) {
-    x <- x - max(x, na.rm = TRUE)
-    x <- exp(x)    
-  } else {
-    ## This does not work if x contains NaNs or +Infs
-    stopifnot(all(x >= 0, na.rm = TRUE))
-    x <- x / max(x, na.rm = TRUE)
-  }
-  return(x / sum(x, na.rm = TRUE))
-}                    
-
-make_vcf <- function(GWASfile, chrom=NULL, pos=NULL, nea=Allele2, ea=Allele1, snp=SNP, ea_af=Freq1, effect=Effect, se=StdErr, pval=p, hg="hg38", GWAS_n=GWAS_n, variant_ann=variant_ann, lift_down=TRUE, WantToLiftOver=TRUE, output=NULL){
+make_vcf <- function(GWASfile, chrom=NULL, pos=NULL, nea=Allele2, ea=Allele1, snp, ea_af=Freq1, effect=Effect, se=StdErr, pval=p, variant_ann, GWAS_n=GWAS_n, WantToLiftOver=TRUE, output=NULL, ch_path = "/lustre/groups/itg/teams/zeggini/projects/fungen-oa/analyses/Ana_coloc_mr/FunctionsAndData/hg19ToHg38.over.chain"){
     print("Reading GWAS sumstats")
     vcf <- fread(GWASfile, data.table=FALSE)
     
@@ -343,34 +285,36 @@ make_vcf <- function(GWASfile, chrom=NULL, pos=NULL, nea=Allele2, ea=Allele1, sn
     colnames(vcf)[colnames(vcf) == pval] <- "p"
     
        
-    if(!is.null(pos) & !is.null(snp)){
+    
+    if(!is.null(snp)){
+            colnames(vcf)[colnames(vcf) == snp] <- "SNP"
+    } else {
+            vcf$SNP <- paste(vcf$chrom, vcf$pos, vcf$Allele2, vcf$Allele1, sep="_")
+            #colnames(vcf)[colnames(vcf) == snp] <- "SNP"
+    }
+        
+        
+     if(!is.null(pos)){
         colnames(vcf)[colnames(vcf) == pos] <- "pos"
         colnames(vcf)[colnames(vcf) == chrom] <- "chrom"
-        colnames(vcf)[colnames(vcf) == snp] <- "SNP"
-        
-        if(WantToLiftOver){
-           print("Lifting over GWAS")
-            res_ggr <- lifOverFunction_vcf(vcf)
-
-            vcf$pos <- NA
-            vcf$pos <- res_ggr$start[match(vcf$SNP, res_ggr$SNP)]
- 
-        }
-        
+       
     } else if(is.null(pos) & !is.null(snp)) {
         print("SNP position not provided, so using reference to map rsid to coordinates")
         
-        colnames(vcf)[colnames(vcf) == snp] <- "SNP"
+        #colnames(vcf)[colnames(vcf) == snp] <- "SNP"
         
         vcf$chrom = variant_ann$chr[match(gsub(":.*","",vcf$SNP), variant_ann$rsid)]
         vcf$pos = variant_ann$pos[match(gsub(":.*","",vcf$SNP), variant_ann$rsid)]   
-    } else if(!is.null(pos) & is.null(snp) & hg=="hg19"){
-        print("SNP ID not provided, so using UKBB reference to map coordinates to rsid")
+        
+    }
+         
+    if(!is.null(pos) & is.null(snp) & !is.null(variant_ann)){
+        print("SNP ID not provided, so using reference to map coordinates to rsid")
         
         colnames(vcf)[colnames(vcf) == pos] <- "pos"
         colnames(vcf)[colnames(vcf) == chrom] <- "chrom"
         
-        vcf$SNP <- NA
+        #vcf$SNP <- NA
         # Create an index for the matches
         indx <- match(paste0(vcf$chrom, vcf$pos, toupper(vcf$Allele2), toupper(vcf$Allele1)), paste0(variant_ann$chr, variant_ann$pos, variant_ann$ref, variant_ann$alt), nomatch = 0)
         vcf$SNP[indx != 0] <- variant_ann$rsid[indx]
@@ -394,7 +338,15 @@ make_vcf <- function(GWASfile, chrom=NULL, pos=NULL, nea=Allele2, ea=Allele1, sn
         vcf$Freq1[indx != 0] <- 1 - variant_ann$AF[indx]
         
     }
-    
+
+    if(WantToLiftOver){
+        print("Lifting over GWAS")
+         res_ggr <- lifOverFunction_vcf(vcf, ch_path=ch_path)
+
+        vcf$pos <- NA
+        vcf$pos <- res_ggr$start[match(vcf$SNP, res_ggr$SNP)]
+ 
+    }
    
     
     print("Filtering VCF for MAF 5% and known SNPs")
@@ -438,13 +390,11 @@ make_vcf <- function(GWASfile, chrom=NULL, pos=NULL, nea=Allele2, ea=Allele1, sn
     
 }
 
-lifOverFunction_vcf <- function(regions, lift_down=TRUE){
-	if(lift_down){
-        	ch_path = "/lustre/groups/itg/teams/zeggini/projects/fungen-oa/analyses/Ana_coloc_mr/FunctionsAndData/hg38ToHg19.over.chain"
-	  } else {
-        	ch_path = "/lustre/groups/itg/teams/zeggini/projects/fungen-oa/analyses/Ana_coloc_mr/FunctionsAndData/hg19ToHg38.over.chain"
-    	}
 
+
+                    
+lifOverFunction_vcf <- function(regions, ch_path){
+	
     ch = import.chain(ch_path)
 
   #print(region)
@@ -464,6 +414,10 @@ lifOverFunction_vcf <- function(regions, lift_down=TRUE){
   res_ggr<-as.data.table(res_ggr)
 }
 
+
+
+
+                    
 GWAS_sumstats_extract <- function(vcfname, top, window_length=1e6, output_path="GWAS_data"){
     GWAS_loci <- paste0(top$chr, ":", 
                      ifelse((top$position - window_length) < 0, 1, top$position - window_length) , 
@@ -512,6 +466,8 @@ GWAS_sumstats_extract <- function(vcfname, top, window_length=1e6, output_path="
 
 } 
 
+
+                    
 ld_matrix_local_GO <- function(GWAS, chr, fname, bfile=paste0("/lustre/groups/itg/shared/referenceData/ukbiobank/chip/bgen2plink/chr",chr)){
   ## write a table with SNP names
   write.table(GWAS[,c('chr.pos.b37','A2')], paste0('Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.REF.txt'), col.names=F, row.names=F, sep='\t', quote=F)
@@ -534,12 +490,15 @@ ld_matrix_local_GO <- function(GWAS, chr, fname, bfile=paste0("/lustre/groups/it
   return(ld_subset)
 }
 
+
+
+                    
 ld_matrix_local_MT <- function(QTL, chr, fname, bfile=paste0("/lustre/groups/itg/teams/zeggini/projects/child_diabesity/analysis/methyl/matrixeQTL/Results/plinkGenotypeFiles/chr",chr)){
   ## write a table with SNP names
-  write.table(QTL[,c('ID','A2')], paste0('Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.REF.txt'), col.names=F, row.names=F, sep='\t', quote=F)
-  write.table(QTL[,c('ID')], paste0('Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.extract'), col.names=F, row.names=F, sep='\t', quote=F)
+  write.table(QTL[,c('SNP','A2')], paste0('Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.REF.txt'), col.names=F, row.names=F, sep='\t', quote=F)
+  write.table(QTL[,c('SNP')], paste0('Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.extract'), col.names=F, row.names=F, sep='\t', quote=F)
 
-  system(paste0('plink --bfile ', bfile, ' --const-fid --extract Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.extract --threads 1 --update-ref-allele Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.REF.txt 2 1 --r square --out Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.LD --make-just-bim'))
+  system(paste0('/lustre/groups/itg/shared/software/bin/plink --bfile ', bfile, ' --const-fid --extract Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.extract --threads 1 --update-ref-allele Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.SNP.REF.txt 2 1 --r square --out Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.LD --make-just-bim'))
 
   ## read in the resulting plink files
   bim = read.table(paste0('Coloc_susie/LD/',gsub("_mQTL_GWAS.*","", fname),'.LD.bim'), header=F)
@@ -551,9 +510,227 @@ ld_matrix_local_MT <- function(QTL, chr, fname, bfile=paste0("/lustre/groups/itg
   colnames(ld) = bim[,2]
   rownames(ld) = bim[,2]
 
-  ld_subset <- ld[rownames(ld) %in% QTL$ID, colnames(ld) %in% QTL$ID]
+  ld_subset <- ld[rownames(ld) %in% QTL$SNP, colnames(ld) %in% QTL$SNP]
   return(ld_subset)
 }
 
 
 
+
+get_overlap_df_small = function(in_signals_gr, in_cpg_df_gr, in_cpg_df, in_gwas_sig, in_peer_dat){
+    ############
+    # overlap to identify relevant cpgs
+    overlap_df = findOverlaps(in_signals_gr, in_cpg_df_gr,
+                            maxgap=-1L, minoverlap=0L,
+                            type=c("any"),
+                            select=c("all"),
+                            ignore.strand=FALSE)
+
+    overlap_df = cbind(signal_gwas = in_gwas_sig[overlap_df@from,],
+                            cpg = in_cpg_df[overlap_df@to,], 
+                            stringsAsFactors = F)
+    ##############################
+    # get relevant methylation qtl data
+
+    # length(unique(overlap_df$cpg.id))
+    # 676
+
+    m_qtl = in_peer_dat[in_peer_dat$gene_id %in% overlap_df$cpg.id, ]
+    m_qtl = split(m_qtl, m_qtl$gene_id)
+    
+    return(list(m_qtl = m_qtl, overlap_df = overlap_df))
+}
+
+
+
+
+                    
+prepare_gwas_sig = function(in_gwas_signals = top, top_signals=top, in_mb_dist = window_length){
+    
+    gwas_sigs <- in_gwas_signals
+    
+    gwas_sigs <- gwas_sigs %>%
+                    dplyr::select(rsid, chr, position) %>%
+                    unique()
+    
+    gwas_sigs$start = ifelse(gwas_sigs$position - in_mb_dist >= 1, 
+                                    gwas_sigs$position - in_mb_dist, 1)
+    gwas_sigs$end = gwas_sigs$position + in_mb_dist
+    signals_gr = makeGRangesFromDataFrame(gwas_sigs,
+                                   keep.extra.columns=FALSE,
+                                   ignore.strand=FALSE,
+                                   seqinfo=NULL,
+                                   seqnames.field=c("chr"),
+                                   start.field="start",
+                                   end.field=c("end"),
+                                   strand.field="strand",
+                                   starts.in.df.are.0based=FALSE)
+
+    return(list(gwas_sigs = gwas_sigs, signals_gr = signals_gr))    
+}
+
+
+
+  
+
+                    
+get_type <- function(info, typex=NULL)
+{
+        if(!is.null(typex))
+        {
+                stopifnot(typex %in% c("cc", "quant"))
+                return(typex)
+        } else if(is.na(info$unit)) {
+                if(! "ncase" %in% names(info))
+                {
+                        info$ncase <- NA
+                }
+                if(is.na(info$ncase))
+                {
+                        message("Type information not available for ", info$id, ". Assuming 'quant' but override using 'type' arguments.")
+                        return("quant")                 
+                } else {
+                        message("No units available but assuming cc due to number of cases being stated")
+                        return("cc")
+                }
+        } else {
+                return(ifelse(info$unit %in% c("logOR", "log odds"), "cc", "quant"))
+        }
+}
+  
+
+
+get_m_anno_epic <- function(m_anno = "EPIC.hg19.manifest.tsv.gz", 
+                            PATH_M_ANNO = 
+                                   "/lustre/groups/itg/teams/zeggini/projects/fungen-oa/analyses/methylqq2/annotations/"){
+  epic =  read.table(file = file.path(PATH_M_ANNO, m_anno), sep = "\t", header = TRUE)
+  epic$pos = epic$CpG_beg + 1
+    
+  rownames(epic) = epic$probeID
+  
+  return(epic)
+}
+
+
+
+
+
+get_GWAScatalog_topHits <- function(GWAS_ID){
+    
+    ######################################
+    ###### EXTRACT TOP SNP INFO FROM THE GWAS CATALOG
+    ######################################
+    
+    s1 <- get_studies(study_id = GWAS_ID)
+    GWAS_n_df <- data.frame(SS=unlist(strsplit(as.character(s1@studies$initial_sample_size),', ')))
+
+    if(dim(GWAS_n_df)[1] > 1 & GWAS_ID != "GCST008363"){
+        GWAS_n_df$cc <- ifelse(grepl("cases", GWAS_n_df$SS, ignore.case = TRUE), "cases", "controls")
+        GWAS_n_df$ancenstry <- ifelse(grepl("eur", GWAS_n_df$SS, ignore.case = TRUE), "eur", "other")
+        GWAS_n_df$SS <- gsub(" .*","",GWAS_n_df$SS) %>% 
+                                      gsub(",","",.) %>%
+                                      as.numeric(.)
+    
+        GWAS_n_df$SS_cases <- sum(GWAS_n_df$SS[GWAS_n_df$cc == "cases" & GWAS_n_df$ancenstry == "eur"])
+        GWAS_n_df$SS_controls <- sum(GWAS_n_df$SS[GWAS_n_df$cc == "controls" & GWAS_n_df$ancenstry == "eur"])
+    
+        GWAS_n <- c(GWAS_n_df$SS_cases[1], GWAS_n_df$SS_controls[1])
+                    
+    
+    } else{
+        GWAS_n <- s1@studies$initial_sample_size %>% gsub(" .*","",.) %>% gsub(",","",.) %>% as.numeric(.)
+    }
+
+
+
+
+    GWAS_associations1 <- get_associations(study_id = GWAS_ID)
+
+    # Extract column association_id for which pvalue is less than 5e-8.
+    association_ids <- dplyr::filter(GWAS_associations1@associations, pvalue < 5e-8) %>% # Filter by p-value
+                              tidyr::drop_na(pvalue) %>%
+                              dplyr::pull(association_id) 
+
+
+
+    GWAS_associations2 <- GWAS_associations1[association_ids]
+    GWAS_associations_df <- as.data.frame(GWAS_associations2@associations)
+
+    GWAS_SNP_df <- as.data.frame(GWAS_associations2@risk_alleles)
+
+    if(length(GWAS_n) == 1){
+        GWAS_associations_df <- GWAS_associations_df %>%
+                                mutate(SS=GWAS_n,
+                                      ID=GWAS_ID) %>%
+                                left_join(.,
+                                         GWAS_SNP_df %>%
+                                          dplyr::select(-risk_frequency),
+                                         by="association_id") 
+
+    } else {
+         GWAS_associations_df <- GWAS_associations_df %>%
+                                mutate(SS.cases=GWAS_n[1],
+                                       SS.controls=GWAS_n[2],
+                                      ID=GWAS_ID) %>%
+                                left_join(.,
+                                         GWAS_SNP_df %>%
+                                          dplyr::select(-risk_frequency),
+                                         by="association_id") 
+
+    }
+
+    GWAS_SNP_df <- as.data.frame(GWAS_associations2@risk_alleles)
+
+
+    GWAS_variants <- get_variants(study_id = GWAS_ID, variant_id = GWAS_associations_df$variant_id)
+
+
+    GWAS_associations_df <- GWAS_associations_df %>% 
+                            left_join(.,
+                                         as.data.frame(GWAS_variants@variants) %>%
+                                          dplyr::select(variant_id, chromosome_name, chromosome_position),
+                                         by="variant_id") 
+    
+    return(GWAS_associations_df)
+
+
+}
+
+
+
+
+Get_sampleSize_GWAScatalog <- function(GWAS_ID, population=NULL){
+    s1 <- get_studies(study_id = GWAS_ID)
+    GWAS_n_df <- data.frame(SS=unlist(strsplit(as.character(s1@studies$initial_sample_size),', ')))
+
+    if(dim(GWAS_n_df)[1] > 1){
+        if(!is.null(population)){
+            GWAS_n_df$cc <- ifelse(grepl("cases", GWAS_n_df$SS, ignore.case = TRUE), "cases", "controls")
+            GWAS_n_df$ancenstry <- ifelse(grepl(population, GWAS_n_df$SS, ignore.case = TRUE), population, "other")
+            GWAS_n_df$SS <- gsub(" .*","",GWAS_n_df$SS) %>% 
+                                            gsub(",","",.) %>%
+                                            as.numeric(.)
+    
+            GWAS_n_df$SS_cases <- sum(GWAS_n_df$SS[GWAS_n_df$cc == "cases" & GWAS_n_df$ancenstry == population])
+            GWAS_n_df$SS_controls <- sum(GWAS_n_df$SS[GWAS_n_df$cc == "controls" & GWAS_n_df$ancenstry == population])
+    
+            GWAS_n <- c(GWAS_n_df$SS_cases[1], GWAS_n_df$SS_controls[1])
+         }  else{
+             GWAS_n_df$cc <- ifelse(grepl("cases", GWAS_n_df$SS, ignore.case = TRUE), "cases", "controls")
+            GWAS_n_df$ancenstry <- ifelse(grepl("eur", GWAS_n_df$SS, ignore.case = TRUE), "eur", "other")
+            GWAS_n_df$SS <- gsub(" .*","",GWAS_n_df$SS) %>% 
+                                            gsub(",","",.) %>%
+                                            as.numeric(.)
+    
+            GWAS_n_df$SS_cases <- sum(GWAS_n_df$SS[GWAS_n_df$cc == "cases" ])
+            GWAS_n_df$SS_controls <- sum(GWAS_n_df$SS[GWAS_n_df$cc == "controls" ])
+    
+            GWAS_n <- c(GWAS_n_df$SS_cases[1], GWAS_n_df$SS_controls[1])
+         }         
+    
+    } else{
+        GWAS_n <- s1@studies$initial_sample_size %>% gsub(" .*","",.) %>% gsub(",","",.) %>% as.numeric(.)
+    }
+
+    return(GWAS_n)
+}
